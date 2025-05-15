@@ -1,6 +1,7 @@
 import random
 import pickle
 import os
+from tqdm import tqdm
 
 BOARD_SIZE = 3
 EMPTY = " "
@@ -112,58 +113,64 @@ def evaluate_agents(agent_x, agent_o, games=100):
 
 def train(agent_x, agent_o, episodes=50000):
     env = TicTacToe()
-    win_x = 0
-    win_o = 0
-    draw = 0
+    win_x = win_o = draw = 0
 
     def calculate_bonus(env, ai, move, opponent):
         bonus = 0
         board = env.board
 
-        # +0.5 for blocking opponent's winning move
+        if board[move] != EMPTY:
+            return bonus  # safety check
+
+        board[move] = ai
+        available_after = [i for i in range(9) if board[i] == EMPTY]
+
+        # --- Fork detection ---
+        forks = 0
+        if len(available_after) <= 6:
+            for m in available_after:
+                if board[m] == EMPTY:
+                    board[m] = ai
+                    win_count = 0
+                    for a, b, c in [
+                        [0,1,2],[3,4,5],[6,7,8],
+                        [0,3,6],[1,4,7],[2,5,8],
+                        [0,4,8],[2,4,6]
+                    ]:
+                        if board[a] == board[b] == board[c] == ai:
+                            win_count += 1
+                    if win_count >= 2:
+                        forks += 1
+                    board[m] = EMPTY
+                    if forks:
+                        bonus += 0.8
+                        break
+        board[move] = EMPTY  # undo
+
+        # --- Block opponent win ---
         board[move] = opponent
         if env.check_winner() == opponent:
             bonus += 0.5
         board[move] = EMPTY
 
-        # +0.8 for creating a fork
-        def count_future_wins(symbol):
-            count = 0
-            for m in env.available_moves():
-                board[m] = symbol
-                if env.check_winner() == symbol:
-                    count += 1
-                board[m] = EMPTY
-            return count
-
-        board[move] = ai
-        forks = 0
-        for m in env.available_moves():
-            board[m] = ai
-            if count_future_wins(ai) >= 2:
-                forks += 1
-            board[m] = EMPTY
-        board[move] = EMPTY
-        if forks > 0:
-            bonus += 0.8
-
-        # +0.1 for choosing the center
+        # --- Center control ---
         if move == 4:
             bonus += 0.1
 
         return bonus
+
+    progress = tqdm(total=episodes, desc="Training Progress")
 
     for i in range(episodes):
         env.reset()
         state = env.get_state()
         done = False
 
+        # Random starting player
         if random.random() < 0.5:
-            current_player = agent_x
-            other_player = agent_o
+            current_player, other_player = agent_x, agent_o
         else:
-            current_player = agent_o
-            other_player = agent_x
+            current_player, other_player = agent_o, agent_x
 
         while not done:
             moves = env.available_moves()
@@ -172,7 +179,6 @@ def train(agent_x, agent_o, episodes=50000):
             new_state = env.get_state()
             winner = env.check_winner()
 
-            # reward shaping bonus for current move
             bonus = calculate_bonus(env, current_player.player, action, other_player.player)
 
             if winner == current_player.player:
@@ -193,14 +199,18 @@ def train(agent_x, agent_o, episodes=50000):
                 state = new_state
                 current_player, other_player = other_player, current_player
 
-        # Epsilon decay (optional, but helps exploration taper off)
+        # --- Epsilon decay ---
         if agent_x.epsilon > 0.01:
             agent_x.epsilon *= 0.9999
+        if agent_o.epsilon > 0.01:
             agent_o.epsilon *= 0.9999
 
-        # Print training progress every 5000 games
         if (i + 1) % 5000 == 0:
             print(f"Episode {i+1} — X Wins: {win_x}, O Wins: {win_o}, Draws: {draw}")
+
+        progress.update(1)
+
+    progress.close()
 
 def play(agent, human_starts):
     env = TicTacToe()
