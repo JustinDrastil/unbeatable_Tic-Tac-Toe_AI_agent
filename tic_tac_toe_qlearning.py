@@ -116,6 +116,43 @@ def train(agent_x, agent_o, episodes=50000):
     win_o = 0
     draw = 0
 
+    def calculate_bonus(env, ai, move, opponent):
+        bonus = 0
+        board = env.board
+
+        # +0.5 for blocking opponent's winning move
+        board[move] = opponent
+        if env.check_winner() == opponent:
+            bonus += 0.5
+        board[move] = EMPTY
+
+        # +0.8 for creating a fork
+        def count_future_wins(symbol):
+            count = 0
+            for m in env.available_moves():
+                board[m] = symbol
+                if env.check_winner() == symbol:
+                    count += 1
+                board[m] = EMPTY
+            return count
+
+        board[move] = ai
+        forks = 0
+        for m in env.available_moves():
+            board[m] = ai
+            if count_future_wins(ai) >= 2:
+                forks += 1
+            board[m] = EMPTY
+        board[move] = EMPTY
+        if forks > 0:
+            bonus += 0.8
+
+        # +0.1 for choosing the center
+        if move == 4:
+            bonus += 0.1
+
+        return bonus
+
     for i in range(episodes):
         env.reset()
         state = env.get_state()
@@ -128,7 +165,6 @@ def train(agent_x, agent_o, episodes=50000):
             current_player = agent_o
             other_player = agent_x
 
-
         while not done:
             moves = env.available_moves()
             action = current_player.choose_action(state, moves)
@@ -136,8 +172,11 @@ def train(agent_x, agent_o, episodes=50000):
             new_state = env.get_state()
             winner = env.check_winner()
 
+            # reward shaping bonus for current move
+            bonus = calculate_bonus(env, current_player.player, action, other_player.player)
+
             if winner == current_player.player:
-                current_player.learn(state, action, 1, new_state, True)
+                current_player.learn(state, action, 1 + bonus, new_state, True)
                 other_player.learn(state, action, -1, new_state, True)
                 if current_player.player == PLAYER_X:
                     win_x += 1
@@ -145,16 +184,16 @@ def train(agent_x, agent_o, episodes=50000):
                     win_o += 1
                 done = True
             elif winner == "Draw":
-                current_player.learn(state, action, 0, new_state, True)
-                other_player.learn(state, action, 0, new_state, True)
+                current_player.learn(state, action, bonus, new_state, True)
+                other_player.learn(state, action, bonus, new_state, True)
                 draw += 1
                 done = True
             else:
-                current_player.learn(state, action, 0, new_state, False)
+                current_player.learn(state, action, bonus, new_state, False)
                 state = new_state
                 current_player, other_player = other_player, current_player
 
-        # Epsilon decay (exploration -> exploitation)
+        # Epsilon decay (optional, but helps exploration taper off)
         if agent_x.epsilon > 0.01:
             agent_x.epsilon *= 0.9999
             agent_o.epsilon *= 0.9999
