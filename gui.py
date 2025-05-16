@@ -10,10 +10,15 @@ class TicTacToeGUI:
         self.root = root
         self.root.title("Tic-Tac-Toe Q-Learning AI")
         self.env = TicTacToe()
-        self.agent = QLearningAgent(PLAYER_O)
-        self.human = PLAYER_X
-        self.ai = PLAYER_O
+        self.agent_x = QLearningAgent(PLAYER_X)
+        self.agent_o = QLearningAgent(PLAYER_O)
+
+        self.human_starts_as = PLAYER_X  # toggles each game
         self.current = PLAYER_X
+        self.ai = None
+        self.human = None
+        self.ai_agent = None
+
         self.buttons = []
         self.stats = {
             "Human Wins": 0,
@@ -22,31 +27,50 @@ class TicTacToeGUI:
         }
         self.ai_history = []
 
-
-
         # Load Q-table if available
+        import pickle
         try:
-            import pickle
-            with open("q_table_o.pkl", "rb") as f:
-                self.agent.q_table = pickle.load(f)
+            with open("q_table_x.pkl", "rb") as f:
+                self.agent_x.q_table = pickle.load(f)
         except:
             pass
 
-        self.status_label = tk.Label(root, text="Your turn (X)", font=("Helvetica", 14))
-        self.status_label.pack()
+        try:
+            with open("q_table_o.pkl", "rb") as f:
+                self.agent_o.q_table = pickle.load(f)
+        except:
+            pass
 
-        self.stats_label = tk.Label(root, text="", font=("Helvetica", 12))
-        self.stats_label.pack()
+        self.root.geometry("500x600")  # Optional: set a larger window size
+        self.root.resizable(False, False)
 
-        frame = tk.Frame(root)
-        frame.pack()
+        # Status label
+        self.status_label = tk.Label(root, text="Your turn (X)", font=("Helvetica", 18))
+        self.status_label.pack(pady=10)
 
+        # Stats label
+        self.stats_label = tk.Label(root, text="", font=("Helvetica", 14))
+        self.stats_label.pack(pady=5)
+
+        # Frame for the game board
+        frame = tk.Frame(root, bg="#444")
+        frame.pack(pady=20)
+
+        # Create larger buttons with padding
         for i in range(9):
-            btn = tk.Button(frame, text="", font=("Helvetica", 20), width=5, height=2,
-                            command=lambda i=i: self.on_click(i))
-            btn.grid(row=i // 3, column=i % 3)
+            btn = tk.Button(
+                frame, text="", font=("Helvetica", 36, "bold"),
+                width=4, height=2, bg="#f0f0f0", fg="#222",
+                activebackground="#ddd", borderwidth=2,
+                command=lambda i=i: self.on_click(i)
+            )
+            btn.grid(row=i // 3, column=i % 3, padx=8, pady=8)
             self.buttons.append(btn)
-            #print(f"Created button {i}")
+
+        # Optional: Add a Reset button
+        reset_btn = tk.Button(root, text="Reset Game", font=("Helvetica", 12), command=self.reset_game)
+        reset_btn.pack(pady=10)
+
 
     def on_click(self, index):
         if self.env.board[index] != " " or self.current != self.human:
@@ -66,7 +90,7 @@ class TicTacToeGUI:
 
     def ai_move(self):
         state = self.env.get_state()
-        move = self.agent.choose_action(state, self.env.available_moves())
+        move = self.ai_agent.choose_action(state, self.env.available_moves())
         bonus = calculate_bonus(self.env, self.ai, move, self.human)
         self.env.make_move(move, self.ai)
 
@@ -105,16 +129,17 @@ class TicTacToeGUI:
         self.status_label.config(text=msg)
         messagebox.showinfo("Game Over", msg)
 
-        # Train AI based on this human-played game
+        # Train correct agent
         final_state = self.env.get_state()
         for i, (state, action, bonus) in enumerate(reversed(self.ai_history)):
             done = (i == 0)
-            self.agent.learn(state, action, reward + bonus, final_state, done)
-            reward *= 0.9  # Discount future reward
+            self.ai_agent.learn(state, action, reward + bonus, final_state, done)
+            reward *= 0.9
 
-        # Save updated Q-table
-        with open("q_table_o.pkl", "wb") as f:
-            pickle.dump(self.agent.q_table, f)
+        # Save correct Q-table
+        table_path = "q_table_x.pkl" if self.ai == PLAYER_X else "q_table_o.pkl"
+        with open(table_path, "wb") as f:
+            pickle.dump(self.ai_agent.q_table, f)
 
         self.stats_label.config(
             text=f"Wins: {self.stats['Human Wins']} | "
@@ -124,14 +149,29 @@ class TicTacToeGUI:
 
         self.reset_game()
 
-
     def reset_game(self):
         self.env.reset()
         for btn in self.buttons:
             btn.config(text="")
-        self.current = PLAYER_X
-        self.status_label.config(text="Your turn (X)")
         self.ai_history.clear()
+
+        # Toggle roles
+        if self.human_starts_as == PLAYER_X:
+            self.human = PLAYER_O
+            self.ai = PLAYER_X
+            self.ai_agent = self.agent_x
+            self.current = PLAYER_X  # AI goes first
+            self.status_label.config(text="AI thinking...")
+            self.root.after(500, self.ai_move)
+        else:
+            self.human = PLAYER_X
+            self.ai = PLAYER_O
+            self.ai_agent = self.agent_o
+            self.current = PLAYER_X  # Human goes first
+            self.status_label.config(text="Your turn (X)")
+
+        # Flip for next round
+        self.human_starts_as = PLAYER_X if self.human_starts_as == PLAYER_O else PLAYER_O
 
 if __name__ == "__main__":
     #print("Launching Tic-Tac-Toe GUI...")
