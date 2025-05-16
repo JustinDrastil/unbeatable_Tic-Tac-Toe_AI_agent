@@ -60,6 +60,32 @@ class QLearningAgent:
         return self.q_table[state]
 
     def choose_action(self, state, available_moves):
+        # Tactical override (bypass Q-table) for immediate threats
+        board = list(state)
+        wins = [
+            [0,1,2],[3,4,5],[6,7,8],
+            [0,3,6],[1,4,7],[2,5,8],
+            [0,4,8],[2,4,6]
+        ]
+
+        # 1. Win if possible
+        for move in available_moves:
+            temp = board[:]
+            temp[move] = self.player
+            for a, b, c in wins:
+                if temp[a] == temp[b] == temp[c] == self.player:
+                    return move
+
+        # 2. Block opponent win
+        opponent = PLAYER_O if self.player == PLAYER_X else PLAYER_X
+        for move in available_moves:
+            temp = board[:]
+            temp[move] = opponent
+            for a, b, c in wins:
+                if temp[a] == temp[b] == temp[c] == opponent:
+                    return move
+
+        # 3. Otherwise use Q-values
         if random.random() < self.epsilon:
             return random.choice(available_moves)
 
@@ -111,53 +137,82 @@ def evaluate_agents(agent_x, agent_o, games=100):
     print(f"X Wins: {results['X']}, O Wins: {results['O']}, Draws: {results['Draw']}")
     return results
 
+def calculate_bonus(env, ai, move, opponent):
+    bonus = 0
+    penalty = 0
+    board = env.board[:]
+    wins = [
+        [0,1,2],[3,4,5],[6,7,8],  # rows
+        [0,3,6],[1,4,7],[2,5,8],  # cols
+        [0,4,8],[2,4,6]           # diagonals
+    ]
+
+    def count_two_in_row(symbol, board_snapshot):
+        count = 0
+        for combo in wins:
+            line = [board_snapshot[i] for i in combo]
+            if line.count(symbol) == 2 and line.count(EMPTY) == 1:
+                count += 1
+        return count
+
+    # Immediate win bonus
+    temp = board[:]
+    temp[move] = ai
+    for a, b, c in wins:
+        if temp[a] == temp[b] == temp[c] == ai:
+            bonus += 1.0
+            break
+
+    # --- DEFENSIVE BONUS: Blocking a win ---
+    temp = board[:]
+    temp[move] = opponent
+    if count_two_in_row(opponent, temp) > 0:
+        bonus += 0.5
+
+    # --- OFFENSIVE BONUS: Creating a fork ---
+    temp = board[:]
+    temp[move] = ai
+    if count_two_in_row(ai, temp) >= 2:
+        bonus += 0.8
+
+    # --- BONUS: Center control ---
+    if move == 4:
+        bonus += 0.1
+
+    # --- BONUS: Corner control ---
+    if move in [0, 2, 6, 8]:
+        bonus += 0.2
+
+    # === PENALTY 1: Missed block ===
+    for i in range(9):
+        if board[i] == EMPTY:
+            board[i] = opponent
+            if count_two_in_row(opponent, board) > 0:
+                if i != move:
+                    penalty -= 0.7  # missed a more urgent block
+                    break
+            board[i] = EMPTY
+
+    # === PENALTY 2: Set up a fork opportunity for opponent ===
+    temp = board[:]
+    temp[move] = ai
+    for i in range(9):
+        if temp[i] == EMPTY:
+            temp[i] = opponent
+            if count_two_in_row(opponent, temp) >= 2:
+                penalty -= 0.8  # enabled fork
+                break
+            temp[i] = EMPTY
+
+    # === PENALTY 3: Edge-only move early on ===
+    if move in [1, 3, 5, 7] and board.count(EMPTY) >= 7:
+        penalty -= 0.2  # early edge move is often suboptimal
+
+    return bonus + penalty
+
 def train(agent_x, agent_o, episodes=50000):
     env = TicTacToe()
     win_x = win_o = draw = 0
-
-    def calculate_bonus(env, ai, move, opponent):
-        bonus = 0
-        board = env.board
-
-        if board[move] != EMPTY:
-            return bonus  # safety check
-
-        board[move] = ai
-        available_after = [i for i in range(9) if board[i] == EMPTY]
-
-        # --- Fork detection ---
-        forks = 0
-        if len(available_after) <= 6:
-            for m in available_after:
-                if board[m] == EMPTY:
-                    board[m] = ai
-                    win_count = 0
-                    for a, b, c in [
-                        [0,1,2],[3,4,5],[6,7,8],
-                        [0,3,6],[1,4,7],[2,5,8],
-                        [0,4,8],[2,4,6]
-                    ]:
-                        if board[a] == board[b] == board[c] == ai:
-                            win_count += 1
-                    if win_count >= 2:
-                        forks += 1
-                    board[m] = EMPTY
-                    if forks:
-                        bonus += 0.8
-                        break
-        board[move] = EMPTY  # undo
-
-        # --- Block opponent win ---
-        board[move] = opponent
-        if env.check_winner() == opponent:
-            bonus += 0.5
-        board[move] = EMPTY
-
-        # --- Center control ---
-        if move == 4:
-            bonus += 0.1
-
-        return bonus
 
     progress = tqdm(total=episodes, desc="Training Progress")
 
@@ -232,39 +287,7 @@ def play(agent, human_starts):
             available = env.available_moves()
             move = agent.choose_action(state, available)
 
-            # --- Reward shaping (simulate before making move) ---
-            bonus = 0
-
-            # +0.5 if blocking a winning move
-            env.board[move] = human
-            if env.check_winner() == human:
-                bonus += 0.5
-            env.board[move] = EMPTY
-
-            # +0.8 if creating a fork
-            def count_future_wins(symbol):
-                count = 0
-                for m in env.available_moves():
-                    env.board[m] = symbol
-                    if env.check_winner() == symbol:
-                        count += 1
-                    env.board[m] = EMPTY
-                return count
-
-            env.board[move] = ai
-            forks = 0
-            for m in env.available_moves():
-                env.board[m] = ai
-                if count_future_wins(ai) >= 2:
-                    forks += 1
-                env.board[m] = EMPTY
-            env.board[move] = EMPTY
-            if forks > 0:
-                bonus += 0.8
-
-            # +0.1 for taking center
-            if move == 4:
-                bonus += 0.1
+            bonus = calculate_bonus(env, ai, move, human)
 
             # Make move for real
             if env.make_move(move, ai):
